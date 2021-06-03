@@ -1,5 +1,14 @@
 # iCalender_ics
 
+Zum erstellen einer iCalander datei.ics für import in Kalenderprogramm
+( System: Debian buster - LANG=de_DE.UTF-8 )
+
+<code>
+$ chmod +x create_termin_ics
+  
+$ ./create_termin_ics -h 
+</code>
+
 ### Hinweis
 
 Beim verwenden einer Import Datei sollte diese nach dem Format für
