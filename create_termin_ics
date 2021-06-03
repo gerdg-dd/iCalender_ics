@@ -1,0 +1,446 @@
+#!/bin/bash
+#===========================================
+#         FILE: create_termin_ics
+#        USAGE: create_termin_ics [OPTIONS]
+#  DESCRIPTION: Erstellen einer iCalander datei.ics für import in Kalenderprogramm
+#
+#      VERSION: 0.0.1
+#      OPTIONS: -f import.csv  (Google Kalender Format - Trenner Komma)
+#               -t termin.ics  ( Ausgabe Datei )
+#               -h Hilfe
+#        NOTES: Debian buster - LANG=de_DE.UTF-8
+#
+#       AUTHOR: Gerd G, gerdg-dd@gmx.de
+#      CREATED: 2021-05-20
+#     REVISION: 
+#       Lizenz: CC BY-NC-SA 4.0 - https://creativecommons.org/licenses/by-nc-sa/4.0/
+#               DE - https://creativecommons.org/licenses/by-nc-sa/4.0/deed.de
+#==========================================
+#
+# TODO: LANG testen und fals nicht vorhanden auf C (en) stellen -- verschiedene Sprachen unterstützen de, en ....
+
+# set default value
+
+# set WORKDIR
+WORKDIR=${PWD}
+
+METHOD="PUBLISH"
+CLASS="PUBLIC"
+# PRODID:  Name oder die Adresse des Erstellers bzw. der verwendeten Anwendung
+PRODID=-//script-${USER}//Calender//DE
+
+# TODO: Teitzone auswahl mit tzselect -- ZEITZONE=${TZ}
+ZEITZONE=$(date +%Z)		# alphabetische Zeitzonenabkürzung (z. B. CET)
+
+LOG_FILE=""
+TEMP_FILE=""
+
+# Name Ausgabe Datei
+TERMIN_ICS=""
+
+# Kalenderformat (erste Zeile der import.csv)
+KALENDERFORMAT_1="Subject,Start Date,End Date,Start Time,End Time,Location,Description"
+KALENDER_CSV=""
+count=0
+
+# set preselected target
+while getopts ':clf:t:z:h' OPTION ; do
+  case "$OPTION" in
+    c)   TEMP_FILE=termin.tmp ;;
+    l)   LOG_FILE="$(date +%Y-%m-%d)_script_termin_ics.log" ;;
+    f)   [ -r ${OPTARG} ] && KALENDER_CSV=${OPTARG} ;;
+    t)   TERMIN_ICS=${OPTARG} ;;
+    z)   ZEITZONE=${OPTARG} ;;
+    h)   echo -e " \n Eingabemöglichkeit und Optionen: \n"
+         echo " Verwendung: create_termin_ics.sh [ OPTION ] "
+         echo -e " \n Folgende Optionen stehen zur Verfügung \n"
+         echo " -c speichert die letze Eingabe in termin.tmp"
+         echo " -l Logfile erstelen "
+         echo " -f <path/import.csv> -- Datei für import (Google Kalender import Format) "
+         echo " -t <path/termin.ics> -- Ausgabedatei für den import in Kalenderprogramm "
+         echo " -z Zeitzone -- default = Systemvorgabe ( CET, UTC ) "
+         echo " -h Hilfe "
+         echo " "
+         exit 1 ;;
+    *)   echo -e " \n  mit -h Hilfe anzeigen \n" && exit 1
+  esac
+done
+
+
+main() {
+    clear
+    if [ -n "${LOG_FILE}" ]; then
+    echo " Datum         = $(date +%Y-%m-%d) "
+    echo " Zeit          = $(date +%H:%M:%S) "
+    echo " Zeitzone      = ${ZEITZONE} "
+    echo " WORKDIR       = ${WORKDIR} "
+    echo " KALENDER_CSV  = ${KALENDER_CSV} "
+    echo " TERMIN_ICS    = ${TERMIN_ICS} "
+    fi
+# Datein / Verzeichnise anlegen
+    [ ! -d ${WORKDIR}/iCalender ] && mkdir ${WORKDIR}/iCalender
+    [ -n "${TEMP_FILE}" ] && . ${WORKDIR}/${TEMP_FILE}
+
+# KALENDER_CSV ist lesbare Datei - Datei für Datenimport benutzen
+    if [[ -z "${KALENDER_CSV}" ]] & [[ -r "${KALENDER_CSV}" ]]; then
+          echo ""
+          echo " Datei ${KALENDER_CSV} importieren"
+          termin_ics $(basename ${KALENDER_CSV%.*})
+          echo " Ausgabe wird in Datei ${TERMIN_ICS} gespeichern "
+          kalender_import
+       else
+          echo ""
+          echo " Eingabe -- Termin anlegen"
+          event_input
+    fi
+
+# *.ics fertigstellen
+
+    if [ -n "${TERMIN_ICS}" ]; then
+        echo "END:VCALENDAR" >> ${WORKDIR}/${TERMIN_ICS}
+        echo ""
+        echo " Datei ${TERMIN_ICS} ist fertig "
+        echo ""
+    fi
+}
+
+# main() end ===============
+
+############################
+# Funktionen
+#
+
+termin_ics() {
+# TERMIN_ICS ist leer - Dateinamen zuweisen
+    [ -z "${TERMIN_ICS}" ] && TERMIN_ICS="iCalender/$1.ics"
+
+# TERMIN_ICS ist nicht leer - Dateiendung .ics festlegen
+    [ -n "${TERMIN_ICS}" ] && TERMIN_ICS="${TERMIN_ICS%.*}.ics"
+
+    [ -n "${LOG_FILE}" ] && echo "" &&  echo " TERMIN_ICS    = ${TERMIN_ICS} " && echo ""
+}
+
+kalender_import() {
+    while IFS=, read -r summary startdate enddate starttime endtime location description ; do
+        [ -n "${LOG_FILE}" ] && echo "" && echo "Zähler = ${count}"
+        event=(${summary} ${startdate} ${enddate} ${starttime} ${endtime} ${location} ${description})
+        if [ "${count}" != "0" -a -n "${event[*]}" ]; then
+              [ -z "${summary}" -o -z "${startdate}" ] &&  echo " Betreff und Anfangsdatum müssen Daten enthalten - Termin kann nicht gespeichert werden " \
+              && ((++count)) && continue
+              event_save
+        fi
+        [ "${count}" = "0" -o -z "${event[*]}" ] && test_kalender_csv
+        ((++count))
+    done < ${KALENDER_CSV}
+}
+
+test_kalender_csv() {
+    if [ "${count}" = "0" ];then
+        # Erste Zeile aus import.csv auf korrektes Format testen
+        if [ "$(head -n1 ${KALENDER_CSV})" = "${KALENDERFORMAT_1}" ];then
+            [ -n "${LOG_FILE}" ] && echo " ${KALENDER_CSV} Kalenderformat ist korrekt"
+            create_ics
+          else
+            echo " ${KALENDER_CSV} ist keine Kalenderdatei oder das Kalenderformat ist fehlerhaft"
+            echo " "
+            echo " Datei sollte genau diese Spalten enthalten "
+            echo "${KALENDERFORMAT_1}"
+            echo " "
+            exit 0
+        fi
+    fi
+
+    [ -z "${event[*]}" ] && echo " Leere Zeile in Datei: ${KALENDER_CSV}"
+}
+
+event_save() {
+    [ -n "${endtime}" -a -z "${enddate}" ] && enddate=${startdate}
+    [ -n "${starttime}" ] && dtstart="$(date +%Y%m%d --date=${startdate})T${starttime//:/}00"
+    [ -z "${starttime}" ] && dtstart="$(date +%Y%m%d --date=${startdate})"
+    [ -n "${endtime}" ] && dtend="$(date +%Y%m%d --date=${enddate})T${endtime//:/}00"
+    [ -z "${endtime}" ] && dtend="$(date +%Y%m%d --date=${enddate})"
+    [ -z "${enddate}" ] && dtend=""
+
+    if [ -n "${LOG_FILE}" ]; then
+    echo " Termin speichern in ${TERMIN_ICS} "
+    echo ""
+    echo " Betreff      : ${summary} "
+    echo " Beginn       : ${dtstart} "
+    echo " Ende         : ${dtend} "
+    echo " Ort          : ${location} "
+    echo " Beschreibung : ${description//'"'/}"
+    echo " ---- "
+   fi
+
+    [ "${ZEITZONE}" = "UTC" ] && z="Z"
+    [ "${ZEITZONE}" != "UTC" ] && z=""
+
+   # Zeitstempel - wann der Kalendereintrag erstellt wurde
+   dtstamp="$(date +%Y%m%d)T$(date +%H%M%S)"
+
+    cat <<EOF>> ${WORKDIR}/${TERMIN_ICS}
+BEGIN:VEVENT
+UID:ce$(date +%Y%m%d)$(date +%H%M%S)cc${count}
+CLASS:${CLASS}
+TZID:${ZEITZONE}
+DTSTAMP:${dtstamp}${z}
+DTSTART:${dtstart}${z}
+DTEND:${dtend}${z}
+SUMMARY:${summary}
+LOCATION:${location}
+DESCRIPTION:${description//'"'/}
+END:VEVENT
+EOF
+
+    if [ -n "${TEMP_FILE}" ]; then
+
+    cat <<EOF> ${WORKDIR}/${TEMP_FILE}
+summary="${summary}"
+location="${location}"
+startdate="${startdate}"
+starttime="${starttime}"
+enddate="${enddate}"
+endtime="${endtime}"
+description="${description//'"'/}"
+EOF
+    fi
+}
+
+event_input() {
+
+    lo=0; st=0; ed=0; et=0; de=0; sd=0
+
+    while [ "${event}" != "end" ];do
+
+        [ "${event}" = "next" ] && select_next && break
+        [ "${event}" = "validate" ] && event_validate && break
+
+        clear
+        echo ""
+        echo "Veranstaltungstermin anlegen"
+        echo " Betreff und Anfangsdatum müssen Daten enthalten - Termin kann sonst nicht angelegt werden "
+        echo ""
+
+        [ -z "${summary}" ] && read -e -n 150 -p "Veranstaltungs Betreff eingeben :" summary && continue
+
+        [ -z "${location}" -a ${lo} -eq 0 ] && read -e -n 100 -p "Veranstalungs Ort eingeben :" location && ((++lo)) && continue
+
+        [ -z "${startdate}" ] && read -e -n 8 -p "Veranstalungs Anfangdatum eingeben (Jahr Monat Tag - YYYYmmdd) : " startdate && continue
+        [[ ! $(date +%Y-%m-%d -d ${startdate} 2>/dev/null ) ]] || [[ ${#startdate} != 8 ]] && echo "Datumseingabe ist fehlerhaft" && echo "" && read -e -n 8 -i ${startdate} -p "Veranstalungs Anfangdatum ändern (Jahr Monat Tag - YYYYmmdd) : " startdate && continue
+
+        [ -z "${starttime}" -a ${st} -eq 0 ] && read -e -n 4 -p "Veranstalungs Anfangszeit eingeben (Stunde:Minute - (HHMM) : " starttime && ((++st)) && continue
+        if [ -n "${starttime}" ]; then
+           [[ ! $(date +%H%M -d ${starttime} 2>/dev/null ) ]] || [[ ${#starttime} != 4 ]] && echo "Zeiteingabe ist fehlerhaft" && echo "" && read -e -n 4 -i ${starttime} -p "Veranstalungs Anfangszeit ändern (Stunde:Minute - (HHMM) : " starttime && continue
+        fi
+
+        [ -z "${enddate}" -a ${ed} -eq 0 ] && read -e -n 8 -p "Veranstalungs Enddatum eingeben (Jahr Monat Tag - YYYYmmdd) : " enddate && ((++ed)) && continue
+        if [ -n "${enddate}" ]; then
+           [[ ! $(date +%Y-%m-%d -d ${enddate} 2>/dev/null ) ]] || [[ ${#enddate} != 8 ]] && echo "Datumseingabe ist fehlerhaft" && echo "" && read -e -n 8 -i ${enddate} -p "Veranstalungs Ende - Datum ändern (Jahr Monat Tag - YYYYmmdd) : " enddate && continue
+        fi
+        if [ -n "${enddate}" ]; then
+           [[ "${startdate}" > "${enddate}" ]] && echo "Enddatum : ${enddate} war vor dem Startdatum : ${startdate} " && echo "" && read -e -n 8 -i ${startdate} -p "Veranstalungs Ende - Datum ändern (Jahr Monat Tag - YYYYmmdd) : " enddate && continue
+        fi
+
+        [ -z "${endtime}" -a ${et} -eq 0 ] && read -e -n 4 -p "Veranstalungs Endzeit eingeben (Stunde:Minute - HHMM) : " endtime && ((++et)) && continue
+        if [ -n "${endtime}" ]; then
+           [[ ! $(date +%H%M -d ${endtime} 2>/dev/null ) ]] || [[ ${#endtime} != 4 ]] && echo "Zeiteingabe ist fehlerhaft" && echo "" && read -e -n 4 -i ${endtime} -p "Veranstalungs Ende - Zeit ändern (Stunde:Minute - (HHMM) : " starttime && continue
+        fi
+        if [ -n "${endtime}" ]; then
+           [ -z "${enddate}" ] && enddate=${startdate} && echo "End Datum eingefügt : ${enddate} "
+           [ -z "${starttime}" ] && starttime=0000 && echo "Start Zeit eingefügt : ${starttime}"
+           [[ "${startdate}${starttime}" > "${enddate}${endtime}" ]] && echo "Ende Zeit : ${endtime} war vor der Startzeit : ${starttime} " && echo "" && read -e -n 4 -i $(( ${starttime} + 100 )) -p "Veranstalungs Ende - Zeit ändern (Stunde:Minute - HHMM) : " endtime && continue
+        fi
+
+        [ -z "${description}" -a ${de} -eq 0 ] && read -e -r -n 500 -p "Veranstalungs Beschreibung eingeben (für Zeilenumbruch \n einfügen) : " description && ((++de)) && continue
+        [ -n "${summary}" -a -n "${startdate}" ] && event="validate"
+
+    done
+}
+
+event_validate() {
+    while [ "${REPLY}" != "8" ]; do
+        clear
+        PS3='Termin - Daten speichern oder ändern: '
+        options=("Betreff      : ${summary}" "Ort          : ${location} " "Anfangsdatum : $(date +%Y-%m-%d -d ${startdate}) " "Anfangszeit  : $([ -n "${starttime}" ] && echo "$(date +%H:%M -d ${starttime})") " "Enddatum     : $( [ -n "${enddate}" ] && echo "$(date +%Y-%m-%d -d ${enddate})") " "Endzeit      : $([ -n "${endtime}" ] && echo "$(date +%H:%M -d ${endtime})") " "Beschreibung : ${description}" "Termin speichern" "abbrechen")
+
+        select opt in "${options[@]}"
+           do
+           case $opt in
+               "${options[0]}")
+                   be=0
+                   while [ ${be} != 1 ] ; do
+                       [ -n "${summary}" ] && read -e -n 150 -i "${summary}" -p "Veranstalungs Betreff ändern : " summary && be=1
+                       [ -z "${summary}" ] && read -e -n 150 -p "Veranstalungs Betreff eingeben : " summary && be=1
+                       [ -z "${summary}" ] && be=0
+                   done
+                   break
+                   ;;
+               "${options[1]}")
+                   lo=0
+                   [ -n "${location}" ] && read -e -n 100 -i "${location}" -p "Veranstalungs Ort ändern : " location && lo=1
+                   [ -z "${location}" -a ${lo} -eq 0 ] && read -e -n 100 -p "Veranstalungs Ort eingeben : " location
+                   break
+                   ;;
+               "${options[2]}")
+                   sd=0
+                   while [ ${sd} != 1 ]; do
+                       [[ $(date +%Y-%m-%d -d ${startdate} 2>/dev/null ) ]] && [[ ${#startdate} == 8 ]] && read -e -n 8 -i ${startdate} -p "Veranstalungs Anfangdatum ändern (Jahr Monat Tag - YYYYmmdd) :" startdate && sd=1
+                       [[ ! $(date +%Y-%m-%d -d ${startdate} 2>/dev/null ) ]] || [[ ${#startdate} != 8 ]] && echo "" && echo "Datumseingabe ist fehlerhaft" && echo "" && read -e -n 8 -i ${startdate} -p "Veranstalungs Anfangdatum ändern (Jahr Monat Tag - YYYYmmdd) : " startdate && sd=1
+                       [[ ! $(date +%Y-%m-%d -d ${startdate} 2>/dev/null ) ]] || [[ ${#startdate} != 8 ]] && sd=0
+                   done
+                   if [ -n "${enddate}" ]; then [[ "${startdate}" > "${enddate}" ]] && enddate=${startdate} ; fi
+                   break
+                   ;;
+               "${options[3]}")
+                   st=0
+                   while [ ${st} != 1 ]; do
+                       [ -z "${starttime}" -a ${st} -eq 0 ] && read -e -n 4 -p "Veranstalungs Anfangszeit eingeben (Stunde:Minute - (HHMM) : " starttime && st=1
+                       if [ -n "${starttime}" -a ${st} -eq 0 ]; then
+                          [[ $(date +%H%M -d ${starttime} 2>/dev/null ) ]] && [[ ${#starttime} == 4 ]] && echo "" && read -e -n 4 -i ${starttime} -p "Veranstalungs Anfangszeit ändern (Stunde:Minute - (HHMM) : " starttime && st=1
+                          [[ ! $(date +%H%M -d ${starttime} 2>/dev/null ) ]] || [[ ${#starttime} != 4 ]] && echo "Zeitangabe ist fehlerhaft" && echo "" && read -e -n 4 -i ${starttime} -p "Veranstalungs Anfangszeit ändern (Stunde:Minute - (HHMM) : " starttime && st=1
+                       fi
+                       if [ -n "${starttime}" ]; then
+                          [[ ! $(date +%H%M -d ${starttime} 2>/dev/null ) ]] || [[ ${#starttime} != 4 ]] && st=0
+                       fi
+                       [ -z "${starttime}" ] && echo "Veranstalungs Anfangszeit gelöscht " && st=1
+                  done
+                  if [ -n "${endtime}" ]; then
+                     [ -z "${enddate}" ] && enddate=${startdate} && echo "End Datum eingefügt : ${enddate} "
+                     [ -z "${starttime}" ] && starttime=0000 && echo "Start Zeit eingefügt : ${starttime}"
+                     [[ "${startdate}${starttime}" > "${enddate}${endtime}" ]] && echo "Ende Zeit : ${endtime} war vor der Startzeit : ${starttime} " && endtime=$(( ${starttime} + 100 ))
+                  fi
+                  break
+                  ;;
+              "${options[4]}")
+                  ed=0
+                  while [ ${ed} != 1 ]; do
+                      [ -z "${enddate}" -a ${ed} -eq 0 ] && read -e -n 8 -p "Veranstalungs Ende - Datum eingeben (Jahr Monat Tag - (YYYYmmdd) :" enddate && ed=1
+                      if [ -n "${enddate}" -a ${ed} -eq 0 ]; then
+                         [[ $(date +%Y-%m-%d -d ${enddate} 2>/dev/null ) ]] && [[ ${#enddate} == 8 ]] && echo "" && read -e -n 8 -i ${enddate} -p "Veranstalungs Ende - Datum ändern (Jahr Monat Tag - YYYYmmdd) :" enddate && ed=1
+                         [[ ! $(date +%Y-%m-%d -d ${enddate} 2>/dev/null ) ]] || [[ ${#enddate} != 8 ]] && echo "" && echo "Datumseingabe ist fehlerhaft" && echo "" && read -e -n 8 -i ${enddate} -p "Veranstalungs Ende - Datum ändern (Jahr Monat Tag - YYYYmmdd) : " enddate && ed=1
+                      fi
+                      if [ -n "${enddate}" ]; then
+                         [[ ! $(date +%Y-%m-%d -d ${enddate} 2>/dev/null ) ]] || [[ ${#enddate} != 8 ]] && ed=0
+                      fi
+                      [ -z "${enddate}" ] && echo "Veranstalungs Ende - Datum gelöscht " && ed=1
+                  done
+                  if [ -n "${enddate}" ]; then [[ "${startdate}" > "${enddate}" ]] && enddate=${startdate} ; fi
+                  break
+                  ;;
+             "${options[5]}")
+                 et=0
+                 while [ ${et} != 1 ]; do
+                     [ -z "${endtime}" -a ${et} -eq 0 ] && read -e -n 4 -p "Veranstalungs Ende - Zei eingeben (Stunde:Minute - (HHMM) : " endtime && et=1
+                     if [ -n "${endtime}" -a ${et} -eq 0 ]; then
+                        [[ $(date +%H%M -d ${endtime} 2>/dev/null ) ]] && [[ ${#endtime} == 4 ]] && echo "" && read -e -n 4 -i ${endtime} -p "Veranstalungs Ende - Zeit ändern (Stunde:Minute - (HHMM) : " endtime && et=1
+                        [[ ! $(date +%H%M -d ${endtime} 2>/dev/null ) ]] || [[ ${#endtime} != 4 ]] && echo "Zeitangabe ist fehlerhaft" && echo "" && read -e -n 4 -i ${endtime} -p "Veranstalungs Ende - Zeit ändern (Stunde:Minute - (HHMM) : " endtime && et=1
+                     fi
+                     if [ -n "${endtime}" ]; then
+                        [[ ! $(date +%H%M -d ${endtime} 2>/dev/null ) ]] || [[ ${#endtime} != 4 ]] && et=0
+                     fi
+                     [ -z "${endtime}" ] && echo "Veranstalungs Ende - Zeit gelöscht " && et=1
+                 done
+                 if [ -n "${endtime}" ]; then
+                    [ -z "${enddate}" ] && enddate=${startdate} && echo "Veranstalungs Ende - Datum eingefügt : ${enddate} "
+                    [ -z "${starttime}" ] && starttime=0000 && echo "Start Zeit eingefügt : ${starttime}"
+                    [[ "${startdate}${starttime}" > "${enddate}${endtime}" ]] && echo "Ende Zeit : ${endtime} war vor der Startzeit : ${starttime} " && endtime=$(( ${starttime} + 100 ))
+                 fi
+                 break
+                 ;;
+             "${options[6]}")
+                 de=0
+                 [ -n "${description}" ] && read -e -r -n 500 -i "${description}" -p "Veranstalungs Beschreibung ändern (für Zeilenumbruch \n einfügen) : " description && de=1
+                 [ -z "${description}" -a ${de} -eq 0 ] && read -e -r -n 500 -p "Veranstalungs Beschreibung eingeben (für Zeilenumbruch \n einfügen) : " description
+                 break
+                 ;;
+             "${options[7]}")
+                 [ "${count}" = "0" ] && termin_ics $(date +%Y-%m-%d -d ${startdate})_${summary// /_}
+                 [ "${count}" = "0" ] && create_ics && ((++count))
+                 [ -n "${LOG_FILE}" ] && echo "" && echo "Zähler = ${count}"
+                 event_save && ((++count))
+                 echo ""
+                 echo " Termin gespeicher in Datei ${TERMIN_ICS} "
+                 event="next"
+                 event_input
+                 break
+                 ;;
+             "${options[8]}")
+                 clear
+                 echo " Termineingabe abgebrochen "
+                 echo ""
+                 [ -n "${TERMIN_ICS}" ] && echo " Datei ${TERMIN_ICS} fertigstellen "
+                 echo ""
+                 event="end"
+                 REPLY="8"
+                 break
+                 ;;
+             "") echo "$REPLY : ungültige Auswahl "; break ;;
+              *) echo "invalid option $REPLY" ;;
+           esac
+    done
+done
+}
+
+select_next() {
+    PS3='Dateneingabe beenden oder einen weiteren Termin einfügen: '
+    options=("Einen weiteren Termin einfügen" "beenden")
+
+    select opt in "${options[@]}" ; do
+        case $opt in
+            "${options[0]}")
+                echo "${options[0]}"
+                startdate=
+                enddate=; ed=0
+                event=
+                event_input && break
+                ;;
+            "${options[1]}")
+                echo ""
+                echo " Datei ${TERMIN_ICS} fertigstellen "
+                echo ""
+                event="end" 
+                REPLY="8"
+                event_input && break
+                ;;
+            "") echo "$REPLY : ungültige Auswahl " ;;
+             *) echo "invalid option $REPLY";;
+        esac
+    done
+}
+
+create_ics() {
+    echo ""
+    echo " Datei ${TERMIN_ICS} anlegen"
+    echo " --- "
+
+    cat <<EOF> ${WORKDIR}/${TERMIN_ICS}
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:${PRODID}
+CALSCALE:GREGORIAN
+METHOD:${METHOD}
+BEGIN:VTIMEZONE
+TZID:CET
+BEGIN:DAYLIGHT
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+TZNAME:CEST
+DTSTART:20160327T020000
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+TZNAME:CET
+DTSTART:20161030T030000
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10
+END:STANDARD
+END:VTIMEZONE
+EOF
+
+}
+
+##############
+
+main "${@}" 2>&1 | tee $([ -n "${LOG_FILE}" ] && echo "${WORKDIR}/${LOG_FILE}")
+
