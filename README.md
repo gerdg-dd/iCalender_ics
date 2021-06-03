@@ -28,5 +28,5 @@ Beispiel: Beispiel_Google_Kalender_import.csv
 
   * Format: bei Termineingabe
     * Datum:   Jahr Monat Tag : YYYYmmdd
-    * Zei:     Stunde Minute  : HHMM
+    * Zeit:    Stunde Minute  : HHMM
 
